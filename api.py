@@ -194,7 +194,7 @@ def wait_for_remote_file(repo, timeout=300, interval=10):
             time.sleep(interval)
     return None
 
-@app.route("/create-vps", methods=["POST"])
+@app.route("/api", methods=["POST"])
 def create_vps():
     data = request.get_json()
     token = data.get("github_token")
