@@ -179,7 +179,7 @@ jobs:
 
 """
 
-@app.route("/create_repo", methods=["POST"])
+@app.route("/api", methods=["POST"])
 def create_repo():
     data = request.get_json()
     token = data.get("github_token")
