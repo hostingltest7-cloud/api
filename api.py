@@ -1,14 +1,17 @@
 from flask import Flask, request, jsonify
 from github import Github, GithubException
+from flask_cors import CORS
 import time
 import random
 import string
+
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
+
 def random_repo_name():
     return "repo-" + ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
 
-MAIN_YML_CONTENT = """\
+MAIN_YML_CONTENT = """
 name: Android 9 (Docker-Android) — noVNC + Cloudflare URL (Max Speed)
 
 permissions: 
@@ -149,10 +152,6 @@ jobs:
       - name: Write remote.txt and commit to repo
         run: |
           echo "${{ steps.tunnel.outputs.url }}" > remote.txt
-          echo "Device: ${DEVICE_NAME}" >> remote.txt
-          echo "Resolution: ${SCREEN_WIDTH}x${SCREEN_HEIGHT}" >> remote.txt
-          echo "RAM: ${RAM_MB}MB | Cores: ${CPU_CORES}" >> remote.txt
-          echo "Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> remote.txt
           git config user.name "github-actions"
           git config user.email "github-actions@users.noreply.github.com"
           git add remote.txt
@@ -176,52 +175,66 @@ jobs:
           echo "=== docker logs (last 200 lines) ==="; docker logs --tail 200 ${CONTAINER_NAME} || true
           echo "=== tunnel.log (last 100 lines) ==="; tail -n 100 tunnel.log || true
 
-"""
+"""  # giữ nguyên nội dung yml như bạn đã có
 
 @app.route("/api", methods=["POST"])
 def create_repo():
+    logs = []
+    def log(msg):
+        logs.append(msg)
+
     data = request.get_json()
     token = data.get("github_token")
     if not token:
-        return jsonify({"error": "Missing github_token"}), 400
+        return jsonify({"status": "error", "error": "Missing github_token", "logs": logs}), 400
 
     try:
+        log("🔑 Đang xác thực GitHub token...")
         g = Github(token)
         user = g.get_user()
         repo_name = random_repo_name()
+        log(f"📦 Tạo repo mới: {repo_name}")
         repo = user.create_repo(repo_name, private=True, auto_init=True)
     except GithubException as e:
-        return jsonify({"error": f"GitHub error: {e}"}), 401
+        log(f"❌ GitHub error: {e}")
+        return jsonify({"status": "error", "error": str(e), "logs": logs}), 401
     except Exception as e:
-        return jsonify({"error": f"Unexpected error: {e}"}), 500
+        log(f"❌ Unexpected error: {e}")
+        return jsonify({"status": "error", "error": str(e), "logs": logs}), 500
 
-    # Tạo file main.yml trong .github/workflows/
+    # Tạo file main.yml
     try:
+        log("⚙️ Đang thêm workflow main.yml...")
         repo.create_file(".github/workflows/main.yml", "Add main.yml", MAIN_YML_CONTENT, branch="main")
     except GithubException as e:
-        return jsonify({"error": f"Failed to add workflow: {e}"}), 500
+        log(f"❌ Lỗi thêm workflow: {e}")
+        return jsonify({"status": "error", "error": str(e), "logs": logs}), 500
 
-    # Trigger workflow bằng commit "dummy"
+    # Trigger workflow
     try:
+        log("🚀 Trigger workflow...")
         repo.create_file("trigger.txt", "Trigger workflow", "Trigger workflow content", branch="main")
     except GithubException:
-        # Nếu file trigger đã tồn tại
-        pass
+        log("⚠️ trigger.txt đã tồn tại, bỏ qua.")
 
-    # Theo dõi file remote.txt
+    # Theo dõi remote.txt
+    log("⏳ Đang đợi remote.txt...")
     remote_txt_content = None
-    for _ in range(60):  # tối đa 5 phút (60*5s)
+    for i in range(60):
         try:
             contents = repo.get_contents("remote.txt")
             remote_txt_content = contents.decoded_content.decode()
+            log("✅ Tìm thấy remote.txt")
             break
         except GithubException:
             time.sleep(5)
+            log(f"... Chưa có remote.txt (lần thử {i+1})")
 
     if remote_txt_content:
-        return jsonify({"status": "success", "remote_content": remote_txt_content}), 200
+        return jsonify({"status": "success", "remote_content": remote_txt_content, "logs": logs}), 200
     else:
-        return jsonify({"error": "remote.txt not found in repo after waiting"}), 500
+        log("❌ remote.txt không xuất hiện sau 5 phút.")
+        return jsonify({"status": "error", "error": "remote.txt not found", "logs": logs}), 500
 
 if __name__ == "__main__":
     app.run(debug=True)
