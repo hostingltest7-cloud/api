@@ -1,9 +1,10 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, Response, stream_with_context
 from github import Github, GithubException
 from flask_cors import CORS
 import time
 import random
 import string
+import json
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
@@ -175,66 +176,69 @@ jobs:
           echo "=== docker logs (last 200 lines) ==="; docker logs --tail 200 ${CONTAINER_NAME} || true
           echo "=== tunnel.log (last 100 lines) ==="; tail -n 100 tunnel.log || true
 
-"""  # giữ nguyên nội dung yml như bạn đã có
+"""
 
 @app.route("/api", methods=["POST"])
 def create_repo():
-    logs = []
-    def log(msg):
-        logs.append(msg)
-
     data = request.get_json()
     token = data.get("github_token")
     if not token:
-        return jsonify({"status": "error", "error": "Missing github_token", "logs": logs}), 400
+        return {"status": "error", "error": "Missing github_token"}, 400
 
-    try:
-        log("🔑 Đang xác thực GitHub token...")
-        g = Github(token)
-        user = g.get_user()
-        repo_name = random_repo_name()
-        log(f"📦 Tạo repo mới: {repo_name}")
-        repo = user.create_repo(repo_name, private=True, auto_init=True)
-    except GithubException as e:
-        log(f"❌ GitHub error: {e}")
-        return jsonify({"status": "error", "error": str(e), "logs": logs}), 401
-    except Exception as e:
-        log(f"❌ Unexpected error: {e}")
-        return jsonify({"status": "error", "error": str(e), "logs": logs}), 500
+    @stream_with_context
+    def generate_logs():
+        def log(msg):
+            yield f"data: {msg}\n\n"
 
-    # Tạo file main.yml
-    try:
-        log("⚙️ Đang thêm workflow main.yml...")
-        repo.create_file(".github/workflows/main.yml", "Add main.yml", MAIN_YML_CONTENT, branch="main")
-    except GithubException as e:
-        log(f"❌ Lỗi thêm workflow: {e}")
-        return jsonify({"status": "error", "error": str(e), "logs": logs}), 500
-
-    # Trigger workflow
-    try:
-        log("🚀 Trigger workflow...")
-        repo.create_file("trigger.txt", "Trigger workflow", "Trigger workflow content", branch="main")
-    except GithubException:
-        log("⚠️ trigger.txt đã tồn tại, bỏ qua.")
-
-    # Theo dõi remote.txt
-    log("⏳ Đang đợi remote.txt...")
-    remote_txt_content = None
-    for i in range(60):
         try:
-            contents = repo.get_contents("remote.txt")
-            remote_txt_content = contents.decoded_content.decode()
-            log("✅ Tìm thấy remote.txt")
-            break
-        except GithubException:
-            time.sleep(5)
-            log(f"... Chưa có remote.txt (lần thử {i+1})")
+            log("🔑 Đang xác thực GitHub token...")
+            g = Github(token)
+            user = g.get_user()
+            repo_name = random_repo_name()
+            log(f"📦 Tạo repo mới: {repo_name}")
+            repo = user.create_repo(repo_name, private=True, auto_init=True)
+        except GithubException as e:
+            yield f"data: ❌ GitHub error: {str(e)}\n\n"
+            return
+        except Exception as e:
+            yield f"data: ❌ Unexpected error: {str(e)}\n\n"
+            return
 
-    if remote_txt_content:
-        return jsonify({"status": "success", "remote_content": remote_txt_content, "logs": logs}), 200
-    else:
-        log("❌ remote.txt không xuất hiện sau 5 phút.")
-        return jsonify({"status": "error", "error": "remote.txt not found", "logs": logs}), 500
+        # Tạo file main.yml
+        try:
+            log("⚙️ Đang thêm workflow main.yml...")
+            repo.create_file(".github/workflows/main.yml", "Add main.yml", MAIN_YML_CONTENT, branch="main")
+        except GithubException as e:
+            yield f"data: ❌ Lỗi thêm workflow: {str(e)}\n\n"
+            return
+
+        # Trigger workflow
+        try:
+            log("🚀 Trigger workflow...")
+            repo.create_file("trigger.txt", "Trigger workflow", "Trigger workflow content", branch="main")
+        except GithubException:
+            log("⚠️ trigger.txt đã tồn tại, bỏ qua.")
+
+        # Theo dõi remote.txt
+        log("⏳ Đang đợi remote.txt...")
+        remote_txt_content = None
+        for i in range(60):
+            try:
+                contents = repo.get_contents("remote.txt")
+                remote_txt_content = contents.decoded_content.decode()
+                log("✅ Tìm thấy remote.txt")
+                log(f"🎯 Nội dung:\n{remote_txt_content}")
+                break
+            except GithubException:
+                time.sleep(5)
+                log(f"... Chưa có remote.txt (lần thử {i+1})")
+
+        if not remote_txt_content:
+            log("❌ remote.txt không xuất hiện sau 5 phút.")
+
+        log("🎉 Hoàn tất.")
+
+    return Response(generate_logs(), mimetype="text/event-stream")
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True, threaded=True)
