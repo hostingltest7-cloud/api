@@ -1,8 +1,8 @@
 import os
-import logging
 import time
 import random
 import string
+import logging
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from github import Github, GithubException
@@ -10,11 +10,13 @@ from github import Github, GithubException
 app = Flask(__name__)
 CORS(app)
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
 # Tạo repo tên ngẫu nhiên
 def random_repo_name():
     return "vps-" + ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
 
-# Nội dung file workflow
+# Workflow file (raw string để tránh lỗi escape \.)
 WORKFLOW_CONTENT = r"""
 name: Android 9 (Docker-Android) — noVNC + Cloudflare URL (Max Speed)
 
@@ -181,7 +183,18 @@ jobs:
 
 """
 
-@app.route("/api", methods=["POST"])
+def wait_for_remote_file(repo, timeout=300, interval=10):
+    """Chờ tối đa timeout giây để file remote.txt xuất hiện"""
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            file_content = repo.get_contents("remote.txt")
+            return file_content.decoded_content.decode().strip()
+        except GithubException:
+            time.sleep(interval)
+    return None
+
+@app.route("/create-vps", methods=["POST"])
 def create_vps():
     data = request.get_json()
     token = data.get("github_token")
@@ -204,39 +217,29 @@ def create_vps():
             branch="main"
         )
 
-        return jsonify({
-            "status": "success",
-            "repo": repo.full_name,
-            "url": repo.html_url
-        })
+        logging.info(f"Repo {repo.full_name} created, waiting for remote.txt...")
+
+        # Poll remote.txt
+        remote_link = wait_for_remote_file(repo)
+        if remote_link:
+            return jsonify({
+                "status": "success",
+                "repo": repo.full_name,
+                "url": remote_link
+            })
+        else:
+            return jsonify({
+                "status": "pending",
+                "repo": repo.full_name,
+                "message": "remote.txt chưa sẵn sàng, thử lại sau."
+            })
+
     except GithubException as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/check-remote", methods=["POST"])
-def check_remote():
-    data = request.get_json()
-    token = data.get("github_token")
-    repo_name = data.get("repo")
-    if not token or not repo_name:
-        return jsonify({"error": "Missing token or repo"}), 400
-
-    try:
-        g = Github(token)
-        repo = g.get_repo(repo_name)
-
-        # Thử lấy file remote.txt trong repo
-        try:
-            file_content = repo.get_contents("remote.txt")
-            link = file_content.decoded_content.decode()
-            return jsonify({"status": "ready", "remote_link": link})
-        except GithubException:
-            return jsonify({"status": "pending"})
-    except Exception as e:
+        logging.exception("Unexpected error")
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
-    logging.info("Khởi động ứng dụng trên Render...")
-    port = int(os.environ.get("PORT", 10000))  # Render cấp port qua biến môi trường
+    port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
