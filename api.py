@@ -1,18 +1,20 @@
-from flask import Flask, request, Response, stream_with_context
-from github import Github, GithubException
-from flask_cors import CORS
+import os
 import time
 import random
 import string
-import json
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+from github import Github, GithubException
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})
+CORS(app)
 
+# Tạo repo tên ngẫu nhiên
 def random_repo_name():
-    return "repo-" + ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+    return "vps-" + ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
 
-MAIN_YML_CONTENT = """
+# Nội dung file workflow
+WORKFLOW_CONTENT = """
 name: Android 9 (Docker-Android) — noVNC + Cloudflare URL (Max Speed)
 
 permissions: 
@@ -178,67 +180,61 @@ jobs:
 
 """
 
-@app.route("/api", methods=["POST"])
-def create_repo():
+@app.route("/create-vps", methods=["POST"])
+def create_vps():
     data = request.get_json()
     token = data.get("github_token")
     if not token:
-        return {"status": "error", "error": "Missing github_token"}, 400
+        return jsonify({"error": "Missing GitHub token"}), 400
 
-    @stream_with_context
-    def generate_logs():
-        def log(msg):
-            yield f"data: {msg}\n\n"
+    try:
+        g = Github(token)
+        user = g.get_user()
 
+        # Tạo repo mới
+        repo_name = random_repo_name()
+        repo = user.create_repo(repo_name, private=False, auto_init=True)
+
+        # Thêm workflow file
+        repo.create_file(
+            ".github/workflows/main.yml",
+            "Add workflow",
+            WORKFLOW_CONTENT,
+            branch="main"
+        )
+
+        return jsonify({
+            "status": "success",
+            "repo": repo.full_name,
+            "url": repo.html_url
+        })
+    except GithubException as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/check-remote", methods=["POST"])
+def check_remote():
+    data = request.get_json()
+    token = data.get("github_token")
+    repo_name = data.get("repo")
+    if not token or not repo_name:
+        return jsonify({"error": "Missing token or repo"}), 400
+
+    try:
+        g = Github(token)
+        repo = g.get_repo(repo_name)
+
+        # Thử lấy file remote.txt trong repo
         try:
-            log("🔑 Đang xác thực GitHub token...")
-            g = Github(token)
-            user = g.get_user()
-            repo_name = random_repo_name()
-            log(f"📦 Tạo repo mới: {repo_name}")
-            repo = user.create_repo(repo_name, private=True, auto_init=True)
-        except GithubException as e:
-            yield f"data: ❌ GitHub error: {str(e)}\n\n"
-            return
-        except Exception as e:
-            yield f"data: ❌ Unexpected error: {str(e)}\n\n"
-            return
-
-        # Tạo file main.yml
-        try:
-            log("⚙️ Đang thêm workflow main.yml...")
-            repo.create_file(".github/workflows/main.yml", "Add main.yml", MAIN_YML_CONTENT, branch="main")
-        except GithubException as e:
-            yield f"data: ❌ Lỗi thêm workflow: {str(e)}\n\n"
-            return
-
-        # Trigger workflow
-        try:
-            log("🚀 Trigger workflow...")
-            repo.create_file("trigger.txt", "Trigger workflow", "Trigger workflow content", branch="main")
+            file_content = repo.get_contents("remote.txt")
+            link = file_content.decoded_content.decode()
+            return jsonify({"status": "ready", "remote_link": link})
         except GithubException:
-            log("⚠️ trigger.txt đã tồn tại, bỏ qua.")
-
-        # Theo dõi remote.txt
-        log("⏳ Đang đợi remote.txt...")
-        remote_txt_content = None
-        for i in range(60):
-            try:
-                contents = repo.get_contents("remote.txt")
-                remote_txt_content = contents.decoded_content.decode()
-                log("✅ Tìm thấy remote.txt")
-                log(f"🎯 Nội dung:\n{remote_txt_content}")
-                break
-            except GithubException:
-                time.sleep(5)
-                log(f"... Chưa có remote.txt (lần thử {i+1})")
-
-        if not remote_txt_content:
-            log("❌ remote.txt không xuất hiện sau 5 phút.")
-
-        log("🎉 Hoàn tất.")
-
-    return Response(generate_logs(), mimetype="text/event-stream")
+            return jsonify({"status": "pending"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
-    app.run(debug=True, threaded=True)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
