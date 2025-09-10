@@ -236,5 +236,7 @@ def check_remote():
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    logging.info("Khởi động ứng dụng trên Render...")
+    port = int(os.environ.get("PORT", 10000))  # Render cấp port qua biến môi trường
     app.run(host="0.0.0.0", port=port)
+
