@@ -180,7 +180,7 @@ jobs:
 
 """
 
-@app.route("/create-vps", methods=["POST"])
+@app.route("/api", methods=["POST"])
 def create_vps():
     data = request.get_json()
     token = data.get("github_token")
@@ -239,4 +239,3 @@ if __name__ == "__main__":
     logging.info("Khởi động ứng dụng trên Render...")
     port = int(os.environ.get("PORT", 10000))  # Render cấp port qua biến môi trường
     app.run(host="0.0.0.0", port=port)
-
