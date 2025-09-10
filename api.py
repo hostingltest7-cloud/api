@@ -1,4 +1,5 @@
 import os
+import logging
 import time
 import random
 import string
@@ -14,7 +15,7 @@ def random_repo_name():
     return "vps-" + ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
 
 # Nội dung file workflow
-WORKFLOW_CONTENT = """
+WORKFLOW_CONTENT = r"""
 name: Android 9 (Docker-Android) — noVNC + Cloudflare URL (Max Speed)
 
 permissions: 
