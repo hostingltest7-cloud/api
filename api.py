@@ -3,7 +3,7 @@ from github import Github, GithubException
 import time
 import random
 import string
-
+CORS(app)
 app = Flask(__name__)
 
 def random_repo_name():
