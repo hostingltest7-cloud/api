@@ -3,9 +3,8 @@ from github import Github, GithubException
 import time
 import random
 import string
-CORS(app, resources={r"/*": {"origins": "*"}})
 app = Flask(__name__)
-
+CORS(app, resources={r"/*": {"origins": "*"}})
 def random_repo_name():
     return "repo-" + ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
 
